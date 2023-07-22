@@ -1,4 +1,4 @@
-models_list = [
+ models_list = [
     {
         "id": "gpt-3.5-turbo",
         "object": "model",
@@ -99,7 +99,9 @@ models_list = [
 
 model_map = {
     "gpt-3.5-turbo": "claude-instant-1",
+    "gpt-3.5-turbo-16k": "claude-instant-1",
     "gpt-3.5-turbo-0613": "claude-instant-1",
     "gpt-4": "claude-2",
-    "gpt-4-0613": "claude-2",
+    "gpt-4-32k": "claude-2",
+    "gpt-4-32k-0613": "claude-1.3-100k",
 }
