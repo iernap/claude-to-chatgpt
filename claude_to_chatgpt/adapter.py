@@ -2,13 +2,17 @@ import httpx
 import time
 import json
 import os
+import asyncio
 from fastapi import Request
 from claude_to_chatgpt.util import num_tokens_from_string
 from claude_to_chatgpt.logger import logger
 from claude_to_chatgpt.models import model_map
 
+MAX_RETRIES = int(os.getenv('RL_RETRIES', 3))
+MAX_WAIT_UNTIL = float(os.getenv('RL_WAIT', 1))
+
 role_map = {
-    "system": "Human",
+    "system": "System",
     "user": "Human",
     "assistant": "Assistant",
 }
@@ -125,72 +129,90 @@ class ClaudeAdapter:
         }
 
         return openai_response
-
+    
     async def chat(self, request: Request):
         openai_params = await request.json()
         headers = request.headers
         claude_params = self.openai_to_claude_params(openai_params)
         api_key = self.get_api_key(headers)
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
+    
+        async with httpx.AsyncClient(http2=True, timeout=120.0) as client:
             if not claude_params.get("stream", False):
-                response = await client.post(
-                    f"{self.claude_base_url}/v1/complete",
-                    headers={
-                        "x-api-key": api_key,
-                        "accept": "application/json",
-                        "content-type": "application/json",
-                        "anthropic-version": "2023-06-01",
-                    },
-                    json=claude_params,
-                )
-                if response.is_error:
-                    raise Exception(f"Error: {response.status_code}")
-                claude_response = response.json()
-                openai_response = self.claude_to_chatgpt_response(claude_response)
-                yield openai_response
-            else:
-                async with client.stream(
-                    "POST",
-                    f"{self.claude_base_url}/v1/complete",
-                    headers={
-                        "x-api-key": api_key,
-                        "accept": "application/json",
-                        "content-type": "application/json",
-                        "anthropic-version": "2023-06-01",
-                    },
-                    json=claude_params,
-                ) as response:
-                    if response.is_error:
+                retries = 0
+                while retries <= MAX_RETRIES:
+                    response = await client.post(
+                        f"{self.claude_base_url}/v1/complete",
+                        headers={
+                            "x-api-key": api_key,
+                            "accept": "application/json",
+                            "content-type": "application/json",
+                            "anthropic-version": "2023-06-01",
+                        },
+                        json=claude_params,
+                    )
+                    if response.status_code == 429:
+                        retries += 1
+                        print(f"Received 429 status code. Retry attempt {retries}.")
+                        await asyncio.sleep(MAX_WAIT_UNTIL)   # Wait for 1 second before retrying
+                    elif response.is_error:
                         raise Exception(f"Error: {response.status_code}")
-                    async for line in response.aiter_lines():
-                        if line:
-                            stripped_line = line.lstrip("data:")
-                            if stripped_line:
-                                try:
-                                    decoded_line = json.loads(stripped_line)
-                                    stop_reason = decoded_line.get("stop_reason")
-                                    if stop_reason:
-                                        yield self.claude_to_chatgpt_response_stream(
-                                            {
-                                                "completion": "",
-                                                "stop_reason": stop_reason,
-                                            }
-                                        )
-                                        yield "[DONE]"
-                                    else:
-                                        completion = decoded_line.get("completion")
-                                        if completion:
-                                            openai_response = (
-                                                self.claude_to_chatgpt_response_stream(
-                                                    decoded_line
+                    else:
+                        claude_response = response.json()
+                        openai_response = self.claude_to_chatgpt_response(claude_response)
+                        yield openai_response
+                        break
+    
+            else:
+                # Similar retry logic for the streaming case
+                retries = 0
+                while retries <= MAX_RETRIES:
+                    async with client.stream(
+                        "POST",
+                        f"{self.claude_base_url}/v1/complete",
+                        headers={
+                            "x-api-key": api_key,
+                            "accept": "application/json",
+                            "content-type": "application/json",
+                            "anthropic-version": "2023-06-01",
+                        },
+                        json=claude_params,
+                    ) as response:
+                        if response.status_code == 429:
+                            retries += 1
+                            print(f"Received 429 status code. Retry attempt {retries}.")
+                            await asyncio.sleep(MAX_WAIT_UNTIL)   # Wait for 1 second before retrying
+                        elif response.is_error:
+                            raise Exception(f"Error: {response.status_code}")
+                        else:
+                            async for line in response.aiter_lines():
+                                if line:
+                                    stripped_line = line.lstrip("data:")
+                                    if stripped_line:
+                                        try:
+                                            decoded_line = json.loads(stripped_line)
+                                            stop_reason = decoded_line.get("stop_reason")
+                                            if stop_reason:
+                                                yield self.claude_to_chatgpt_response_stream(
+                                                    {
+                                                        "completion": "",
+                                                        "stop_reason": stop_reason,
+                                                    }
                                                 )
-                                            )
-                                            yield openai_response
-                                except json.JSONDecodeError as e:
-                                    logger.debug(
-                                        f"Error decoding JSON: {e}"
-                                    )  # Debug output
-                                    logger.debug(
-                                        f"Failed to decode line: {stripped_line}"
-                                    )  # Debug output
+                                                yield "[DONE]"
+                                            else:
+                                                completion = decoded_line.get("completion")
+                                                if completion:
+                                                    openai_response = (
+                                                        self.claude_to_chatgpt_response_stream(
+                                                            decoded_line
+                                                        )
+                                                    )
+                                                    yield openai_response
+                                        except json.JSONDecodeError as e:
+                                            logger.debug(
+                                                f"Error decoding JSON: {e}"
+                                            )  # Debug output
+                                            logger.debug(
+                                                f"Failed to decode line: {stripped_line}"
+                                            )  # Debug output
+                            break
