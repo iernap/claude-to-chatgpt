@@ -1,4 +1,4 @@
-  models_list = [
+models_list = [
     {
         "id": "gpt-3.5-turbo",
         "object": "model",
