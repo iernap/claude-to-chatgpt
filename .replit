@@ -1,6 +1,6 @@
-run = ["bash", "./main.sh"]
+run =  ["poetry", "run", "python", "claude_to_chatgpt/app.py"]
 
-entrypoint = "main.sh"
+entrypoint = "claude_to_chatgpt/app.py"
 
 [nix]
 channel = "stable-21_11"
