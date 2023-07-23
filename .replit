@@ -6,6 +6,8 @@ entrypoint = "claude_to_chatgpt/app.py"
 # be hidden in the workspace.
 hidden = ["venv", ".config", "**/__pycache__", "**/.mypy_cache", "**/*.pyc"]
 
+run = "poetry run pip install -r requirements.txt && poetry install --only main && poetry run python claude_to_chatgpt/app.py"
+
 # Specifies which nix channel to use when building the environment.
 [nix]
 channel = "stable-22_11"
